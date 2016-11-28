@@ -1,26 +1,28 @@
-.idea/*
-*.bkp
-*.egg-info
+# IntelliJ Files
+.idea/
+*.ipr
+*.iws
+*.iml
+*.log
+
+# Eclipse Files
+.classpath
+.project
+
+# Build outputs
+target/
 *.pyc
+*.egg-info/
+
+# Vagrant outputs
+.vagrant
+
+# OS hidden files
 .DS_Store
-.ipynb*
-.coverage
-airflow/www/static/coverage/
-airflow.db
-airflow.cfg
-airflow_login.py
-build
-cover
-dbinit.py
-docs/_*
-dist
-env
-initdb.py
-logs
-MANIFEST
-secrets.py
-sftp-config.json
-unittests.cfg
-error.log
-unittests.db
-rat-results.txt
+
+# Temporary Maven files
+dependency-reduced-pom.xml
+
+# Hive
+metastore_db/
+
