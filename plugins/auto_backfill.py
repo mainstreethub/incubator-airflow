@@ -1,24 +1,18 @@
 from datetime import datetime
-import httplib
+import json
+import logging
 import os
 
-from flask import Blueprint, jsonify, Response
+from flask import Blueprint, jsonify, redirect, request
 from itertools import product, chain
 from airflow.models import DagModel, DagBag, TaskInstance
 from airflow import settings, conf
 from airflow.www.app import csrf
 from airflow.utils.state import State
 
-
-AutoBackfillBlueprint = Blueprint('auto_backfill', __name__, url_prefix='/auto_backfill')
+PATH_ROOT = "/auto_backfill"
+AutoBackfillBlueprint = Blueprint('auto_backfill', __name__, url_prefix=PATH_ROOT)
 dagbag = DagBag(os.path.expanduser(conf.get('core', 'DAGS_FOLDER')))
-
-
-def find_dag(session, dag_id):
-    """
-    find a dag with the given dag_id
-    """
-    return session.query(DagModel).filter(DagModel.dag_id == dag_id).first()
 
 
 @AutoBackfillBlueprint.route('/<dag_id>', methods=['GET'])
@@ -45,11 +39,18 @@ def backfill_dag(dag_id):
             Content-Type: application/json
 
     """
-    return backfill_past(dag_id)
+    origin = request.args.get('origin')
+    stats = backfill_past(dag_id)
+    logging.info("auto_backfill completed for %s - %s" % (dag_id, json.dumps(stats)))
+    if origin is None:
+        return jsonify(stats)
+    else:
+        return redirect(origin)
 
 
-def backfill_past(dag_id):
+def backfill_past(dag_id, dates=None):
     '''
+    recursively set all tasks to success for a dag back to the start date
     Copied from airflow.www.views.Airflow#success
     :param dag_id:
     :return:
@@ -72,10 +73,11 @@ def backfill_past(dag_id):
 
     TI = TaskInstance
 
-    if dag.schedule_interval == '@once':
-        dates = [start_date]
-    else:
-        dates = dag.date_range(start_date, end_date=end_date)
+    if dates is None:
+        if dag.schedule_interval == '@once':
+            dates = [start_date]
+        else:
+            dates = dag.date_range(start_date, end_date=end_date)
 
     tis = session.query(TI).filter(
         TI.dag_id == dag_id,
@@ -110,4 +112,12 @@ def backfill_past(dag_id):
     session.commit()
     session.close()
 
-    return "Altered/Created %d task instances" % len(tis_all_altered)
+    stats = {dag_id: {"created": len(tis_to_create), "updated": len(tis_to_change)}}
+
+    # modify any subdagOperators
+    subdags_ids = [sd.subdag.dag_id for sd in dag.tasks if sd.task_type == "SubDagOperator"]
+    for sd in subdags_ids:
+        sub_stats = backfill_past(sd, dates)
+        stats.update(sub_stats)
+
+    return stats

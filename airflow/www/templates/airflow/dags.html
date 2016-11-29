@@ -92,6 +92,9 @@
                     <a href="{{ url_for("airflow.refresh", dag_id=dag_id) }}" title="Refresh">
                       <span class="glyphicon glyphicon-refresh" aria-hidden="true"></span>
                     </a>
+                    <a href="/auto_backfill/{{ dag_id }}?origin=/" title="AutoBackfill">
+                      <span class="glyphicon glyphicon-check" aria-hidden="true"></span>
+                    </a>
                     </nobr>
                 </td>
             </tr>
