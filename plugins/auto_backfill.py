@@ -2,50 +2,82 @@ from datetime import datetime
 import json
 import logging
 import os
+from itertools import product
 
 from flask import Blueprint, jsonify, redirect, request
-from itertools import product, chain
-from airflow.models import DagModel, DagBag, TaskInstance
+from flask_login import flash
+from airflow.configuration import AirflowConfigException, get_dags_folder
+
+from airflow.models import DagBag, TaskInstance
 from airflow import settings, conf
 from airflow.www.app import csrf
 from airflow.utils.state import State
 
 PATH_ROOT = "/auto_backfill"
 AutoBackfillBlueprint = Blueprint('auto_backfill', __name__, url_prefix=PATH_ROOT)
-dagbag = DagBag(os.path.expanduser(conf.get('core', 'DAGS_FOLDER')))
-
+dagbag = DagBag(get_dags_folder())
+try:
+    airflow_env = conf.get('custom', 'airflow_environment')
+except AirflowConfigException, e:
+    airflow_env = 'UNKNOWN'
 
 @AutoBackfillBlueprint.route('/<dag_id>', methods=['GET'])
 @csrf.exempt
 def backfill_dag(dag_id):
     """
-    .. http:post:: /auto_backfill/<dag_id>/
+    .. http:post:: /auto_backfill/<dag_id>?origin=...
 
         Backfills a dag and all its task instances from the start_date to the current date.
 
         **Example request**:
 
         .. sourcecode:: http
-            POST /auto_backfill/sf_parent_dag_v2
-            Host: localhost:7357
+            GET /auto_backfill/example_subdag_operator
+            Host: localhost:8080
             Content-Type: application/json
 
         **Example response**:
 
         .. sourcecode:: http
 
-            HTTP/1.1 201 OK
+            HTTP/1.1 200 OK
             Vary: Accept
             Content-Type: application/json
+            {
+                example_subdag_operator: {
+                    created: 0,
+                    updated: 0
+                },
+                example_subdag_operator.section-1: {
+                    created: 0,
+                    updated: 0
+                },
+                example_subdag_operator.section-2: {
+                    created: 0,
+                    updated: 0
+                }
+            }
 
     """
     origin = request.args.get('origin')
-    stats = backfill_past(dag_id)
-    logging.info("auto_backfill completed for %s - %s" % (dag_id, json.dumps(stats)))
-    if origin is None:
-        return jsonify(stats)
+    def respond(msg, level='info'):
+        if origin is None:
+            return jsonify({'message': msg, 'level': level})
+        else:
+            flash(msg, level)
+            return redirect(origin)
+    if airflow_env not in ('dev', 'test'):
+        return respond('Failed to auto_backfill %s.  Auto backfill is only supported in dev or test.' % dag_id, 'warning')
     else:
-        return redirect(origin)
+        try:
+            stats = backfill_past(dag_id)
+            msg = "Completed auto_backfill for %s - %s" % (dag_id, json.dumps(stats))
+            logging.info(msg)
+            return respond(msg, 'info')
+        except Exception, e:
+            msg = "Unable to update %s because of %s" % (dag_id, e.message)
+            logging.warn(msg)
+            return respond(msg, 'warning')
 
 
 def backfill_past(dag_id, dates=None):
@@ -57,8 +89,6 @@ def backfill_past(dag_id, dates=None):
     '''
     dag = dagbag.get_dag(dag_id)
 
-    # Flagging tasks as successful
-    session = settings.Session()
     execution_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     end_date = execution_date
 
@@ -79,6 +109,7 @@ def backfill_past(dag_id, dates=None):
         else:
             dates = dag.date_range(start_date, end_date=end_date)
 
+    session = settings.Session()
     tis = session.query(TI).filter(
         TI.dag_id == dag_id,
         TI.execution_date.in_(dates),
@@ -92,10 +123,6 @@ def backfill_past(dag_id, dates=None):
     tis_to_create = list(
         set(tasks) -
         set([(ti.task_id, ti.execution_date) for ti in tis]))
-
-    tis_all_altered = list(chain(
-        [(ti.task_id, ti.execution_date) for ti in tis_to_change],
-        tis_to_create))
 
     for ti in tis_to_change:
         ti.state = State.SUCCESS
