@@ -1,13 +1,12 @@
 from datetime import datetime
 import json
 import logging
-import os
 from itertools import product
 
 from flask import Blueprint, jsonify, redirect, request
 from flask_login import flash
-from airflow.configuration import AirflowConfigException, get_dags_folder
 
+from airflow.configuration import AirflowConfigException, get_dags_folder
 from airflow.models import DagBag, TaskInstance, DagRun
 from airflow import settings, conf
 from airflow.www.app import csrf

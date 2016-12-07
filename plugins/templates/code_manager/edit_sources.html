@@ -1,0 +1,44 @@
+{% extends "airflow/master.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block body %}
+{{ super() }}
+<div class="container">
+    <div class="row">
+        <div class="col-sm-8">
+            <form action="{{ url_for('.do_post') }}" method="post" name="edit_sources">
+                <h2>Configure Dag Sources</h2>
+
+                <div class="form-group">
+                    <label for="dag_repo_input">Dag Repo</label>
+                    <input type="text" class="form-control"
+                           placeholder="git@github.com:mainstreethub/datalake-transforms.git"
+                           id="dag_repo_input"
+                           name="dag_repo" autofocus value="{{ overrides['dag_repo'] }}">
+                </div>
+                <div class="form-group">
+                    <label for="dag_commit_input">Dag Commit</label>
+                    <input type="text" class="form-control"
+                           placeholder="master" name="dag_commit" id="dag_commit_input" value="{{ overrides['dag_commit'] }}">
+
+                    <p class="help-block">Can be a branch, tag, or sha1. '__latest' will find the most recent <code>v*</code> tag.</p>
+                </div>
+                <h2>Configure Script Sources</h2>
+                <div class="form-group">
+                    <label for="resource_directory_input">Resource Directory</label>
+                    <input type="text" class="form-control"
+                       placeholder="master" name="resource_directory" id="resource_directory_input" value="{{ overrides['resource_directory'] }}">
+                    <p class="help-block">Where to look for custom jar files.</p>
+                </div>
+                <input name="_csrf_token" type="hidden" value="{{ csrf_token() }}">
+                <button class="btn btn-med btn-primary"
+                        type="submit">
+                    Save
+                </button>
+                <a class="btn btn-med btn-default" href="{{ url_for('.do_get') }}">Cancel</a>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
