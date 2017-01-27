@@ -1,0 +1,28 @@
+{% extends "airflow/master.html" %}
+
+{% block title %}Airflow - REST API{% endblock %}
+
+{% block head_css %}
+{{ super() }}
+
+{% endblock %}
+
+{% block body %}
+<h1>Known SLA's</h1>
+{% for sla in slas %}
+<tr>
+    <td class="col-sm-2">
+        <strong>{{ sla['dag_id'] }}</strong>
+    </td>
+    <td class="col-sm-8">
+        {{ sla['max_time'] }}
+    </td>
+</tr>
+{% endfor %}
+
+{% endblock %}
+
+{% block tail %}
+{{ super() }}
+
+{% endblock %}
