@@ -94,17 +94,19 @@ class SLACheckView(BaseView):
         delta = cron_presets[dag.schedule_interval]
       else:
         delta = dag.schedule_interval
-
       # Compute when it should have run last
       runs = date_range(start_date=dag.start_date, end_date=dag.end_date, delta=delta)
-      last_scheduled_run = runs.pop()
+
+      # Pop -2 because the date_range util will include the execution date of the next run
+      # which would false report out of compliance during most recent execution
+      last_scheduled_run = runs.pop(-2)
 
       # Compute when the last run should have finished by
       max_delta = last_scheduled_run + timedelta(hours=sla['max_time'])
 
       # Check if we care if the last DAG run has succeeded yet
       if datetime.now() >= max_delta:
-        logging.debug("Last run SLA for {0['dag_id} is not yet enforceable".format(sla))
+        logging.debug("Last run SLA for {0} is enforceable".format(sla))
         last_run = settings.Session.query(DagRun).filter(
           DagRun.dag_id == dag.dag_id,
           DagRun.execution_date == last_scheduled_run
@@ -112,7 +114,7 @@ class SLACheckView(BaseView):
 
         # Report if not successful
         if not last_run or last_run.state != State.SUCCESS:
-          logging.debug("Found that the SLA for {0['dag_id'} is in violation of configured SLA".format(sla))
+          logging.debug("Found that the SLA for {0} is in violation of configured SLA".format(sla))
           violations.append(dag.dag_id)
 
     if len(violations) == 0:
@@ -120,5 +122,5 @@ class SLACheckView(BaseView):
       return make_response()
 
     else:
-      logging.debug("Found {len(violations)} SLA's out of compliance")
+      logging.info("Found {0} SLA's out of compliance".format(len(violations)))
       return make_response(", ".join(violations)), 500
