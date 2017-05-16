@@ -1,5 +1,5 @@
 """
-This provides a way for a DataDog monitor to ping airflow and query for jobs currently
+This provides a way to ping airflow and query for jobs currently
 out of compliance with their SLA defined in an Airflow variable.
 
 DataDogs should be configured similar to the following:
@@ -17,13 +17,10 @@ instances:
 import logging
 from datetime import datetime, timedelta
 
-from flask import Blueprint
-from flask import make_response
+from flask import Blueprint, jsonify
 from flask_admin import BaseView, expose
-
 from airflow import settings
 from airflow.models import DagBag, DagRun, Variable
-from airflow.utils.dates import date_range, cron_presets
 from airflow.utils.state import State
 
 '''
@@ -32,11 +29,11 @@ Airflow Variable is expecting a JSON Array formatted as:
 [
   {
     'dag_id': 'id_1',
-    'max_time': 5
+    'duration': 300
   },
   {
     'dag_id': 'id_2',
-    'max_time': 2
+    'duration': 120
   }
 ]
 
@@ -45,82 +42,86 @@ which will begin reporting if the job has not succeeded after 5 hours
 and another which will begin reporting if the DAG with DAG ID of id_2 has
 not succeeded after 2 hours.
 '''
-SLA_CONFIG_VARIABLE='slas'
+SLA_CONFIG_VARIABLE = 'slas'
 
 SLACheckBlueprint = Blueprint(
-    "sla_check", __name__,
-    template_folder='templates',
-    static_folder='static',
-    static_url_path='/static/sla_check')
+  "sla_check", __name__,
+  template_folder='templates',
+  static_folder='static',
+  static_url_path='/static/sla_check')
+
 
 class SLACheckView(BaseView):
-  # Diagnostic endpoint which lists out the discovered SLA's and
-  # what time they are due at today.
   @expose('/')
   def index(self):
     logging.info("SLA Check index() called")
     slas = Variable.get(SLA_CONFIG_VARIABLE, default_var=dict(), deserialize_json=True)
-    print slas
     return self.render("sla_check/index.html", slas=slas)
 
-  # Wraps the violations for DataDog's format, it will return 200 if
-  # there are no violations and 500 and a comma-separated string of
-  # dag_id's that are currently in violation.
   @expose('/slacheck')
   def sla_check(self):
-    logging.info("SLA Check() called")
+    logging.info("SLA Check called")
 
-    violations = []
-
-    # Load SLA's and DAG configurations
-    slas = Variable.get(SLA_CONFIG_VARIABLE, default_var=dict(), deserialize_json=True)
-    logging.info("Loaded SLA configuration for {0}".format(slas))
+    # load sla configuration
+    slas = Variable.get(SLA_CONFIG_VARIABLE, default_var=list(), deserialize_json=True)
+    logging.info("Loaded SLA configuration: {}".format(slas))
 
     dagbag = DagBag()
 
-    # Filter down to active, unpaused DAG's with SLA's
-    enforceable_slas = []
-    for x in slas:
-      if x['dag_id'] in dagbag.dags.keys():
-        dag = dagbag.dags[x['dag_id']]
-        if dag.schedule_interval and not dag.is_paused and not dag.is_subdag:
-          enforceable_slas.append(x)
-    logging.debug("Found {0} enforceable SLA's".format(len(enforceable_slas)))
+    logging.info("DAG keys: {}".format(dagbag.dags.keys()))
 
-    for sla in enforceable_slas:
-      dag = dagbag.dags[sla['dag_id']]
-      # Check if this DAG uses an Airflow Cron Preset
-      if dag.schedule_interval in cron_presets:
-        delta = cron_presets[dag.schedule_interval]
-      else:
-        delta = dag.schedule_interval
-      # Compute when it should have run last
-      runs = date_range(start_date=dag.start_date, end_date=dag.end_date, delta=delta)
+    # get all dags with an SLA defined in the slas variable
+    dags_slas = [(dagbag.dags[s['dag_id']], s['duration']) for s in slas if s['dag_id'] in dagbag.dags.keys()]
+    logging.info("DAGs with an sla defined {}".format(dags_slas))
 
-      # Pop -2 because the date_range util will include the execution date of the next run
-      # which would false report out of compliance during most recent execution
-      last_scheduled_run = runs.pop(-2)
+    violations = []
 
-      # Compute when the last run should have finished by
-      max_delta = last_scheduled_run + timedelta(hours=sla['max_time'])
+    # for each of these dags with SLAs, find the last run which should have happened
+    dags_last_runs = []
+    for dag, sla_max_duration in dags_slas:
+      if dag.schedule_interval and not dag.is_paused:
+        dttm_now = datetime.now()
 
-      # Check if we care if the last DAG run has succeeded yet
-      if datetime.now() >= max_delta:
-        logging.debug("Last run SLA for {0} is enforceable".format(sla))
-        last_run = settings.Session.query(DagRun).filter(
-          DagRun.dag_id == dag.dag_id,
-          DagRun.execution_date == last_scheduled_run
-        ).first()
+        latest_execution_run_date, following_schedule_date = _get_run_dates(dag, timedelta(minutes=sla_max_duration))
 
-        # Report if not successful
-        if not last_run or last_run.state != State.SUCCESS:
-          logging.debug("Found that the SLA for {0} is in violation of configured SLA".format(sla))
-          violations.append(dag.dag_id)
+        # check if execution date + schedule_interval + sla_duration is after the current time
+        sla_due_date = following_schedule_date + timedelta(minutes=sla_max_duration)
 
-    if len(violations) == 0:
-      logging.debug("Found no SLA's out of compliance")
-      return make_response()
+        logging.info("execution_date={0} for dag_id={1} with an SLA={2} has due_date={3}"
+                     .format(latest_execution_run_date, dag.dag_id, sla_max_duration, sla_due_date))
 
-    else:
-      logging.info("Found {0} SLA's out of compliance".format(len(violations)))
-      return make_response(", ".join(violations)), 500
+        if (dttm_now - sla_due_date) < timedelta(minutes=50):
+          last_dag_run = settings.Session.query(DagRun).filter(
+            DagRun.dag_id == dag.dag_id,
+            DagRun.execution_date == latest_execution_run_date).first()
+
+          # report if not successful
+          if not last_dag_run or last_dag_run.state != State.SUCCESS:
+            logging.info("Found that the SLA for {0} is in violation of configured SLA".format(dag.dag_id))
+            violations.append(
+              {"dag_id": dag.dag_id,
+               "due_date": sla_due_date.isoformat(),
+               "execution_date": latest_execution_run_date.isoformat(),
+               "sla_duration": sla_max_duration,
+               "start_date": last_dag_run.start_date.isoformat() if last_dag_run else None
+               }
+            )
+
+    logging.info("Found {0} SLA's out of compliance".format(len(violations)))
+    return jsonify({"sla_misses": violations})
+
+
+def _get_run_dates(dag, sla_timedelta, dttm=None):
+  if dttm is None:
+    dttm = datetime.now()
+
+  following_run = dag.following_schedule(dttm)
+  previous_run = dag.previous_schedule(dttm)
+
+  while (dttm < previous_run or ((following_run + sla_timedelta) > datetime.now())):
+    following_run = previous_run
+    previous_run = dag.previous_schedule(previous_run)
+
+  logging.info("previous run to check is {} at the following schedule {}".format(previous_run, following_run))
+  return previous_run, following_run
+
