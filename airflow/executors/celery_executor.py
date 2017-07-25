@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 
 from builtins import object
 import logging
@@ -34,11 +35,24 @@ airflow worker
 DEFAULT_QUEUE = configuration.get('celery', 'DEFAULT_QUEUE')
 
 
+def getdict(section, key, default=None, deserialize_json=True):
+    if default is None:
+        default = dict()
+
+    try:
+        var = configuration.get(section, key)
+    except AirflowException:
+        return default
+
+    return json.loads(var) if deserialize_json else var
+
+
 class CeleryConfig(object):
     CELERY_ACCEPT_CONTENT = ['json', 'pickle']
     CELERYD_PREFETCH_MULTIPLIER = 1
     CELERY_ACKS_LATE = True
     BROKER_URL = configuration.get('celery', 'BROKER_URL')
+    BROKER_TRANSPORT_OPTIONS = getdict('celery', 'BROKER_TRANSPORT_OPTIONS')
     CELERY_RESULT_BACKEND = configuration.get('celery', 'CELERY_RESULT_BACKEND')
     CELERYD_CONCURRENCY = configuration.getint('celery', 'CELERYD_CONCURRENCY')
     CELERY_DEFAULT_QUEUE = DEFAULT_QUEUE
